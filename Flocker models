@@ -1,0 +1,190 @@
+#reformat data set habitat and forest dep covariates
+
+Spare_share_df2 <- Spare_share_df %>%
+  mutate(habitat2 = ifelse(habitat == "pasture", -1, 1),
+         forest_dependency = ifelse(forestDep_birdlife %in%
+                                      c("Does not normally occur in forest", "Low"), "Low",
+                                    forestDep_birdlife), forest_dependency = factor(forest_dependency,
+                                                                                    levels = c("Low", "Medium",
+                                                                                               "High")))
+Spare_share_df2 %>% group_by(forest_dependency,
+                             habitat2, Q) %>% 
+  summarise(N = n())
+
+#install latest version of Flocker
+
+remotes::install_github("jsocolar/flocker")
+library(flocker)
+
+
+#extract time columns into separate dataframe and add to main dataframe ----
+
+hps_df <- DF %>% select(species, point, hps1, hps2, hps3, hps4, obs1, obs2, obs3, obs4)
+
+Bird_DF <- left_join(Spare_share_df2, hps_df, by = c("species", "point"))
+
+write.csv(Bird_DF, "Bird_DF.csv")
+
+unique_bird <- props_all %>% 
+  group_by(fDep_label, WL_label) %>%
+  summarise(unique(species))
+
+write.csv(unique_bird, "unique_bird.csv")
+
+nrow(filter(unique_bird, forestDep_birdlife == "Low"))
+nrow(filter(unique_bird, forestDep_birdlife == "Medium"))
+nrow(filter(unique_bird, forestDep_birdlife == "High"))
+
+#create final dataframe ----
+
+Bird_DF <- read.csv("BIRD_DF.csv")
+
+Bird_DF <- Bird_DF %>% drop_na("forest_dependency")
+
+Bird_DF <- Bird_DF %>% mutate(prop = wf_total/31415.93)
+
+Bird_DF$forestDep_birdlife <- factor(Bird_DF$forest_dependency, levels=c("Low", "Medium", "High"))
+
+Bird_DF <- Bird_DF %>% mutate(prop_sc = scale(prop, center = TRUE, scale = TRUE))
+
+Bird_DF <- Bird_DF %>% mutate(tc_1000_sc = scale(tc_1000, center = TRUE, scale = TRUE))
+
+Bird_DF <- Bird_DF %>% mutate(hps1_sc = scale(hps1, center = TRUE, scale = TRUE)) %>% 
+  mutate(hps2_sc = scale(hps2, center = TRUE, scale = TRUE)) %>% 
+  mutate(hps3_sc = scale(hps3, center = TRUE, scale = TRUE)) %>% 
+  mutate(hps4_sc = scale(hps4, center = TRUE, scale = TRUE))
+
+Bird_DF <- Bird_DF %>% mutate(site_sp = interaction(site, species))
+
+attr(Bird_DF$prop_sc, "scaled:scale")
+attr(Bird_DF$tc_1000_sc, "scaled:scale")
+
+attr(Bird_DF$prop_sc,  "scaled:center")
+attr(Bird_DF$tc_1000_sc, "scaled:center")
+
+#convert to flocker format ----
+
+#make observation matrix
+
+Bird_obs <- Bird_DF %>% select(v1, v2, v3, v4)
+Bird_obs <- data.matrix(Bird_obs)
+
+#make unit covariate dataframe
+
+Bird_uc <- Bird_DF %>% select(species, point, tc_1000, tc_1000_sc, forest_dependency, prop, prop_sc, habitat2, site_sp, site)
+
+#make event covariate dataframe
+
+Bird_observer <- Bird_DF %>% select(obs1, obs2, obs3, obs4)
+
+Bird_time <- Bird_DF %>% select(hps1_sc, hps2_sc, hps3_sc, hps4_sc)
+
+Bird_ec <- list(observer = data.matrix(Bird_observer),
+                time = data.matrix(Bird_time))
+
+#convert to flocker data
+
+Bird_flocker <- make_flocker_data(obs = Bird_obs,
+                                  unit_covs = Bird_uc,
+                               event_covs = Bird_ec)
+
+saveRDS(Bird_flocker, "Bird_flocker_data.rds")
+
+
+Bird_flocker_rep_constant1 <- make_flocker_data(obs = Bird_obs,
+                                  unit_covs = Bird_uc)
+
+#set weakly informative priors
+
+priors <- c(set_prior("normal(0, 5)", class="b"), 
+            set_prior("normal(0, 1.7)", class="Intercept"))
+
+#make flocker model
+#FULL model
+
+Bird_flocker_model_new <- flocker::flock(f_occ = ~ 1 + tc_1000_sc *
+                            forest_dependency +
+                            prop_sc * forest_dependency + 
+                            habitat2 * forest_dependency +
+                            (1 + habitat2 +
+                               tc_1000_sc +
+                               prop_sc|species) +
+                            site + (1|site_sp), 
+                          f_det = ~ 1 + time +
+                            (1 + time | species),
+                          flocker_data = Bird_flocker, 
+                          prior = priors,
+                          chains = 4, cores = 4, iter = 2000,
+                          backend = "cmdstanr", #threads = threading(4),
+                          file = "Bird_flocker_model_new.rds"
+)
+
+summary(Bird_flocker_model_new)
+
+#Just farm wf model
+
+Bird_flocker_model_wf <- flocker::flock(f_occ = ~ 1 + prop_sc * forest_dependency + 
+                                    habitat2 * forest_dependency +
+                                    (1 + habitat2 +
+                                     prop_sc|species) +
+                                    site + (1|site_sp), 
+                                  f_det = ~ 1 + time +
+                                    (1 + time | species),
+                                  flocker_data = Bird_flocker, 
+                                  prior = priors,
+                                  chains = 4, cores = 4, iter = 2000,
+                                  backend = "cmdstanr", #threads = threading(4),
+                                  file = "Bird_flocker_model_wf_rerun.rds"
+)
+
+summary(Bird_flocker_model_wf)
+
+#Just landscape WF model (tc_1000)
+
+Bird_flocker_tc <- flocker::flock(f_occ = ~ 1 + tc_1000_sc *
+                                           forest_dependency +
+                                           habitat2 * forest_dependency +
+                                           (1 + habitat2 +
+                                           tc_1000_sc|species) +
+                                           site + (1|site_sp), 
+                                         f_det = ~ 1 + time +
+                                           (1 + time | species),
+                                         flocker_data = Bird_flocker, 
+                                         prior = priors,
+                                         chains = 4, cores = 4, iter = 2000,
+                                         backend = "cmdstanr", #threads = threading(4),
+                                         file = "Bird_flocker_model_tc.rds"
+)
+
+#NULL model
+
+Bird_flocker_model_null <- flocker::flock(f_occ = ~ 1 + forest_dependency * habitat2 +
+                                           (1 + habitat2|species) +
+                                           site + (1|site_sp), 
+                                         f_det = ~ 1 + time +
+                                           (1 + time | species),
+                                         flocker_data = Bird_flocker, 
+                                         prior = priors,
+                                         chains = 4, cores = 4, iter = 2000,
+                                         backend = "cmdstanr", #threads = threading(4),
+                                         file = "Bird_flocker_model_null.rds"
+)
+
+
+tc_1000_model_compare <- loo_compare_flocker(list(Bird_flocker_model_null = Bird_flocker_model_null, 
+                                                  Bird_flocker_tc = Bird_flocker_tc), thin = 4)
+
+full_model_compare <- loo_compare_flocker(list(Bird_flocker_model_null = Bird_flocker_model_null, 
+                                               Bird_flocker_model_new = Bird_flocker_model_new), thin = 4)
+
+wf_model_compare <- loo_compare_flocker(list(Bird_flocker_model_wf = Bird_flocker_model_wf, 
+                                             Bird_flocker_model_null = Bird_flocker_model_null), thin = 4)
+
+compare_all_models <- loo_compare_flocker(list(Bird_flocker_model_wf = Bird_flocker_model_wf, Bird_flocker_tc = Bird_flocker_tc, 
+                                               Bird_flocker_model_null = Bird_flocker_model_null), thin = 4)
+
+compare_all_models_full <- loo_compare_flocker(list(Bird_flocker_model_wf = Bird_flocker_model_wf, 
+                                                    Bird_flocker_tc = Bird_flocker_tc, Bird_flocker_model_null = Bird_flocker_model_null,
+                                                    Bird_flocker_model_new = Bird_flocker_model_new), thin = 4)
+
+library(loo)
