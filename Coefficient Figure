@@ -1,0 +1,68 @@
+library(flocker); library(brms); library(dplyr); library(ggplot2); library(ggh4x)
+
+mod <- readRDS("Bird_flocker_model_new.rds")
+class(mod) <- c("brmsfit", "flocker_fit")
+attributes(mod)$lik_type <- "V"
+
+mod_fixefs <- fixef(mod, summary = F) %>%
+  as_tibble
+hab_effs <- mod_fixefs %>%
+  mutate(habitat_high = occ_habitat2, 
+         habitat_medium = occ_habitat2 + `occ_forest_dependencyMedium:habitat2`, 
+         habitat_low = occ_habitat2 + `occ_forest_dependencyLow:habitat2`, 
+         wf_high = occ_prop_sc, 
+         wf_medium = occ_prop_sc + `occ_forest_dependencyMedium:prop_sc`, 
+         wf_low = occ_prop_sc + `occ_forest_dependencyLow:prop_sc`, 
+         tc_high = occ_tc_1000_sc, 
+         tc_medium = occ_tc_1000_sc + `occ_tc_1000_sc:forest_dependencyMedium`, 
+         tc_low = occ_tc_1000_sc + `occ_tc_1000_sc:forest_dependencyLow`
+  ) %>%
+  select(habitat_high:tc_low) %>%
+  reshape2::melt() %>%
+  group_by(variable) %>%
+  summarise(mean = mean(value), 
+            lwr = quantile(value, .025), 
+            upr = quantile(value, .975), 
+            pd = round(min(sum(value<0), sum(value>0))/n(), 2)) %>%
+  mutate(pd = ifelse(pd == 0, "<0.01", pd))
+
+ylabs <- expression(
+  beta["forest, high"],
+  beta["forest, medium"],
+  beta["forest, low"],
+  beta["farm wf, high"],
+  beta["farm wf, medium"],
+  beta["farm wf, low"],
+  beta["landscape wf, high"],
+  beta["landscape wf, medium"],
+  beta["landscape wf, low"]
+)
+
+windowsFonts(Times=windowsFont("TT Times New Roman"))
+
+fix_eff_fig <- ggplot(hab_effs, aes(mean, variable)) + geom_point() +
+  geom_linerange(aes(xmin=lwr, xmax=upr)) + 
+  geom_vline(xintercept=0, lty="longdash") +
+  scale_x_continuous(expand=c(.1,.1)) +
+  scale_y_discrete(labels=ylabs) +
+  theme_bw() +
+  theme(text=element_text(family="serif")) +
+  theme(axis.text = element_text(colour="black"), 
+        axis.text.y = element_text(size=17),
+        axis.text.x = element_text(size = 13),
+        axis.title = element_text(size = 14),
+        strip.background = element_blank(), 
+        strip.text = element_text(hjust=0, face="bold"),
+        aspect.ratio = .7,
+        panel.grid = element_blank(), 
+        legend.position=c(.86,.85), 
+        legend.background = element_rect(colour="black"), 
+        legend.key.height=unit(.9,"line"), 
+        plot.margin = unit(c(0.2, 2, 0.2, 0.2), units = "cm")
+  ) +
+  labs(x = "Parameter value (\u00B1 95% CI)", y="Fixed Effects Parameters") +
+  geom_text(aes(label=pd, x = upr), position = position_dodge(width=.5), 
+            hjust=-0.2, vjust=.3, size=4.5, family = "serif")
+
+fix_eff_fig + force_panelsizes(rows = unit(8, "in"),
+                               cols = unit(7, "in"))
