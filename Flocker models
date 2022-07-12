@@ -186,5 +186,3 @@ compare_all_models <- loo_compare_flocker(list(Bird_flocker_model_wf = Bird_floc
 compare_all_models_full <- loo_compare_flocker(list(Bird_flocker_model_wf = Bird_flocker_model_wf, 
                                                     Bird_flocker_tc = Bird_flocker_tc, Bird_flocker_model_null = Bird_flocker_model_null,
                                                     Bird_flocker_model_new = Bird_flocker_model_new), thin = 4)
-
-library(loo)
