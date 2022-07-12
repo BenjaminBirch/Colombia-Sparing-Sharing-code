@@ -2,6 +2,10 @@ library(dplyr)
 library(ggplot2)
 library(sf)
 library(reticulate)
+
+# IMPORTANT: requires GEE account, Python installation, and setting up 
+# authentification keys
+
 ## Set up GEE session ----
 # point reticulate ``to the conda environment created in GEE_setup.sh
 use_condaenv('gee_interface', conda = "auto", required = TRUE)
@@ -63,4 +67,21 @@ tcs_df <- tcs %>%
 
 tcs_df <- tcs_df %>% mutate(forest2000 = as.integer(treecover2000>50))
 
-tcs_df <- tcs_df %>% mutate(forest2019 = forest2000 - sign(lossyear)) 
+tcs_df <- tcs_df %>% mutate(forest2019 = forest2000 - sign(lossyear))
+
+#get example plots
+tcs_df %>%
+  # as.data.frame %>% 
+  filter(id %in% 1:46) %>% 
+  mutate(tc = cut(treecover2000, c(-.1, 25, 50, 75, 100.1), ordered=T)) %>%
+  ggplot(aes(x, y, fill=tc)) + geom_tile() + 
+  facet_wrap(~point, scales="free") +
+  theme_bw() +
+  theme(aspect.ratio=1, 
+        strip.text=element_text(hjust=0, face="bold"), 
+        strip.background = element_blank(), 
+        panel.border = element_blank(), 
+        panel.grid=element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks=element_blank()) +
+  labs(x="", y="")
