@@ -1,0 +1,325 @@
+library(flocker); library(brms); library(dplyr); library(ggplot2)
+
+mod <- readRDS("Bird_flocker_model_new.rds")
+
+# scaling and centring
+prop_unscale <- function(x) x*0.1018974 + 0.05118145
+prop_scale <- function(x) (x-0.05118145)/0.1018974
+tc1000_unscale <- function(x) x*0.2610634 + 0.2401884
+tc1000_scale <- function(x) (x-0.2401884)/0.2610634
+
+# get species level coefficients
+coefs_sp <- coef(mod, summary=F)$species
+
+# get ordering of species in this array
+sp_ordering <- dimnames(coefs_sp)[[2]]
+
+# create lookup table species:forest dependency category
+fDep_lookup <- mod$data %>%
+    select(species, forest_dependency) %>% 
+    unique %>%
+    arrange(species) %>%
+    mutate(fDep_label = factor(forest_dependency, levels=c("High", "Medium", "Low")))
+
+# check: does the order of species in the lookup table match the order in the 
+# posterior array
+all(fDep_lookup$species == sp_ordering)
+
+# create forest dependency matrices ----
+
+fDep_medium <- matrix(as.integer(fDep_lookup$forest_dependency == "Medium"), 
+                      ncol=nrow(fDep_lookup), nrow=4000, byrow=T)
+
+fDep_low <- matrix(as.integer(fDep_lookup$forest_dependency == "Low"), 
+                   ncol=nrow(fDep_lookup), nrow=4000, byrow=T)
+
+
+# Calculate species-level effects for each parameter ----
+# To stick with the preceding example of these takes the beta1, beta2, beta3, 
+# and sticks these all together to generate a total beta effect that captures 
+# the species-level variation, and whether a species is a forest bird, medium, 
+# or low dependency.
+
+intercepts <- coefs_sp[,,"occ_Intercept"] +
+    coefs_sp[,,"occ_forest_dependencyLow"] * fDep_low + 
+    coefs_sp[,,"occ_forest_dependencyMedium"] * fDep_medium 
+
+occ_tc_1000_total <- coefs_sp[,,"occ_tc_1000_sc"] + 
+    coefs_sp[,,"occ_tc_1000_sc:forest_dependencyLow" ] * fDep_low + 
+    coefs_sp[,,"occ_tc_1000_sc:forest_dependencyMedium"] * fDep_medium 
+
+occ_prop_sc_total <- coefs_sp[,,"occ_prop_sc"] + 
+    coefs_sp[,,"occ_forest_dependencyLow:prop_sc" ] * fDep_low + 
+    coefs_sp[,,"occ_forest_dependencyMedium:prop_sc"] * fDep_medium 
+
+occ_habitat2_total <- coefs_sp[,,"occ_habitat2"] + 
+    coefs_sp[,,"occ_forest_dependencyLow:habitat2" ] * fDep_low + 
+    coefs_sp[,,"occ_forest_dependencyMedium:habitat2"] * fDep_medium 
+
+# We will use these ^ throughout to estimate various quantities of interest. 
+
+# (1) Calculate winners and losers
+
+occ_forest <- intercepts + occ_habitat2_total*1 + occ_prop_sc_total * -0.50228408
+
+# sequence of prop wf
+n_lvls <- 30
+prop_lvls <- seq(0, .6, len=n_lvls)
+tc1000_sc_lvls <- seq(min(mod$data$tc_1000_sc), max(mod$data$tc_1000_sc), len=n_lvls)
+
+diff_catch <- vector("list", length=n_lvls)
+# iterate over each level of prop_sc, and calculate each species' occupancy
+for(i in 1:n_lvls) {
+    print(i)
+    prop_i <- prop_lvls[i]
+   occ_pasture <- intercepts + occ_habitat2_total*-1 + occ_prop_sc_total * prop_scale(prop_i)
+    # calculate the difference in occupancy (if higher in pasture, +ve, if lower, -ve)
+    diff <- occ_pasture - occ_forest
+    diff_catch[[i]] <- bind_cols(prop = prop_i, 
+                                 species = colnames(intercepts),
+                                 mean = matrixStats::rowMeans2(t(diff)),
+                                 matrixStats::rowQuantiles(t(diff), probs=c(.05, .95))) %>%
+        rename(lwr = `5%`, upr=`95%`)
+}
+
+# bind these together into a single dataframe
+diffs_all <- bind_rows(diff_catch) %>%
+    left_join(., fDep_lookup) 
+
+# calculate winners and losers
+winners_losers <- diffs_all %>% 
+    group_by(forest_dependency, species) %>%
+    summarise(WL = mean(sign(mean))) %>%
+    mutate(WL_label = case_when(WL == -1 ~ "Loser", 
+                              WL == 1 ~ "Winner", 
+                              TRUE ~ "Intermediate"),
+           WL_label = factor(WL_label, levels=c("Winner", "Intermediate", "Loser")))
+
+
+# (2) Summarise the effects of prop WF, habitat, tc1000  ----
+# this is just taking the effects calculated above and summarising them to a mean 
+# and credible interval. 
+tc_eff <- cbind(mean = matrixStats::rowMeans2(t(occ_tc_1000_total)),
+                matrixStats::rowQuantiles(t(occ_tc_1000_total), probs=c(.05, .95))) %>%
+    as.data.frame %>%
+    mutate(species = row.names(.)) %>%
+    as_tibble %>%
+    rename(tc_mean = mean, tc_lwr = `5%`, tc_upr=`95%`) %>%
+    left_join(fDep_lookup, .)
+
+prop_eff <- cbind(mean = matrixStats::rowMeans2(t(occ_prop_sc_total)),
+                matrixStats::rowQuantiles(t(occ_prop_sc_total), probs=c(.1, .9))) %>%
+    as_tibble %>%
+    rename(prop_mean = mean, prop_lwr = 2, prop_upr=3)
+
+habitat_eff <- cbind(mean = matrixStats::rowMeans2(t(occ_habitat2_total)),
+                matrixStats::rowQuantiles(t(occ_habitat2_total), probs=c(.1, .9))) %>%
+    as_tibble %>%
+    rename(habitat_mean = mean, habitat_lwr = 2, habitat_upr=3)
+
+
+effs_all <- bind_cols(tc_eff, prop_eff, habitat_eff) %>%
+    as_tibble %>% left_join(., winners_losers) %>%
+    mutate(WL_cat = factor(WL_label, levels=c("Winner", "Intermediate", "Loser")))
+
+# plotting 
+cols <- RColorBrewer::brewer.pal(9, "RdBu")[c(8, 1, 1)]
+cols[2] <- "black"
+
+(p1 <- ggplot(effs_all, aes(habitat_mean, prop_mean, fill=WL_cat, col=WL_cat)) + 
+    geom_errorbar(aes(ymax=prop_upr, ymin=prop_lwr), width=0, alpha=.3) +
+    geom_errorbarh(aes(xmax=habitat_upr, xmin=habitat_lwr), height=0, alpha=.3) +
+    geom_point(fill="grey80", size=2) +
+    geom_hline(yintercept=0, lty="longdash", size = 0.8) +
+    geom_vline(xintercept=0, lty="longdash", size = 0.8) +
+    scale_fill_manual(values=cols) +
+    scale_colour_manual(values=cols) +
+    scale_shape_manual(values=c("circle filled", "diamond filled", "square filled")) +
+    theme_bw() +
+    theme(text=element_text(family="serif")) +
+    theme(axis.text = element_text(colour="black"), 
+          axis.text.y = element_text(size=18.5),
+          axis.text.x = element_text(size = 18.5),
+          axis.title = element_text(size = 20)) +
+    theme(plot.title = element_text(size = 20)) +
+    theme(legend.title = element_blank()) +
+    theme(legend.text = element_text(size = 18.5)) +
+    theme(panel.grid = element_blank(), 
+          axis.text = element_text(colour="black"), 
+          aspect.ratio=1) +
+    guides(colour = guide_legend(override.aes = list(size = 5, alpha = 1, linetype = 0))) +
+        labs(y = "Farm wildlife friendliness effect", 
+         x = "Habitat effect", title = bquote(~bold("(c)"))))
+
+ p2 <- ggplot(effs_all, aes(habitat_mean, tc_mean, col = WL_cat, fill = WL_cat)) +
+   geom_errorbar(aes(ymax=tc_upr, ymin=tc_lwr), width=0, alpha = .3) +
+   geom_errorbarh(aes(xmax=habitat_upr, xmin=habitat_lwr), height=0, alpha = .3) +
+   geom_point(fill = "grey80", size = 2) +
+   geom_hline(yintercept=0, lty="longdash", size = 0.8) +
+   geom_vline(xintercept=0, lty="longdash", size = 0.8) +
+   scale_fill_manual(values=cols) +
+   scale_colour_manual(values=cols) +
+   scale_shape_manual(values=c("circle filled", "diamond filled", "square filled")) +
+   theme_bw() +
+   theme(text=element_text(family="serif")) +
+   theme(axis.text = element_text(colour="black"), 
+         axis.text.y = element_text(size=18.5),
+         axis.text.x = element_text(size = 18.5),
+         axis.title = element_text(size = 20)) +
+   theme(plot.title = element_text(size = 20)) +
+   theme(legend.position = "none") +
+   theme(legend.title = element_blank()) +
+   theme(panel.grid = element_blank(), 
+           axis.text = element_text(colour="black"), 
+           aspect.ratio=1) +
+   #guides(colour="none", fill = "none")
+     labs(y = "Landscape wildlife friendliness effect",
+          x = "Habitat effect", title = bquote(~bold("(b)")))
+   
+ p3 <- ggplot(effs_all, aes(prop_mean, tc_mean, col=WL_cat, fill = WL_cat)) +
+     geom_errorbar(aes(ymax=tc_upr, ymin=tc_lwr), width=0, alpha = .3) +
+     geom_errorbarh(aes(xmax=prop_upr, xmin=prop_lwr), height=0, alpha = .3) +
+     geom_point(fill = "grey80", size = 2) +
+   geom_hline(yintercept=0, lty="longdash", size = 0.8) +
+   geom_vline(xintercept=0, lty="longdash", size = 0.8) +
+   scale_fill_manual(values=cols) +
+   scale_colour_manual(values=cols) +
+   scale_shape_manual(values=c("circle filled", "diamond filled", "square filled")) +
+   theme_bw() +
+   theme(text=element_text(family="serif")) +
+   theme(axis.text = element_text(colour="black"), 
+         axis.text.y = element_text(size=18.5),
+         axis.text.x = element_text(size = 18.5),
+         axis.title = element_text(size = 20)) +
+   theme(plot.title = element_text(size = 20)) +
+   theme(legend.position = "none") +
+   theme(legend.title = element_blank()) +
+   theme(panel.grid = element_blank(), 
+         axis.text = element_text(colour="black"), 
+         aspect.ratio=1) +
+   #guides(colour="none", fill = "none")
+   labs(y = "Landscape wildlife friendliness effect",
+        x = "Farm wildlife friendliness effect", title = bquote(~bold("(a)")))
+   
+ p_all <- egg::ggarrange(p3, ggplot() + theme_void(), p2, ggplot() + theme_void(), 
+                         p1, nrow = 1, widths = c(1, 0.1, 1, 0.1, 1))
+                         #, heights=c(1,1), widths=c(1,1), ncol = 1, nrow = 1)
+ 
+# (3) Generate plots across WF & tc1000 axis ----
+# iterate across each of the prop levels and generate a posterior occupancy for
+# each species in pasture
+
+out_catch <- vector("list", length=n_lvls)
+for(i in 1:length(prop_lvls)) {
+    print(i)
+    prop_i <- prop_lvls[i]
+    occ_pasture <- intercepts + occ_habitat2_total*-1 + occ_prop_sc_total * prop_scale(prop_i)
+    # summarise
+    out_catch[[i]] <- bind_cols(prop = prop_i, 
+                                species = colnames(intercepts),
+                                mean = matrixStats::rowMeans2(t(occ_pasture)),
+                                matrixStats::rowQuantiles(t(occ_pasture), probs=c(.05, .95))) %>%
+        rename(lwr = `5%`, upr=`95%`)
+}
+# bind together into a single dataframe
+props_all <- bind_rows(out_catch) %>%
+    left_join(., fDep_lookup) %>%
+    left_join(., winners_losers)
+
+# calculate across the range of tc1000_sc
+out_catch <- vector("list", length=n_lvls)
+for(i in 1:length(prop_lvls)) {
+    print(i)
+    prop_i <- prop_lvls[i]
+    occ_pasture <- intercepts + occ_habitat2_total*-1 + occ_tc_1000_total * tc1000_sc_lvls[i]
+    # summarise
+    out_catch[[i]] <- bind_cols(tc_1000_sc = tc1000_sc_lvls[i], 
+                                species = colnames(intercepts),
+                                mean = matrixStats::rowMeans2(t(occ_pasture)),
+                                matrixStats::rowQuantiles(t(occ_pasture), probs=c(.05, .95))) %>%
+        rename(lwr = `5%`, upr=`95%`)
+}
+
+tcs_all <- bind_rows(out_catch) %>%
+    left_join(., fDep_lookup) %>%
+    left_join(., winners_losers)
+
+
+# forest occupancy will get plotted at .9 on the axis
+
+occ_forest_summ <- bind_cols(prop = .9, 
+                             tc_1000_sc = 3,
+                             species = colnames(intercepts),
+                             mean = matrixStats::rowMeans2(t(occ_forest)),
+                             matrixStats::rowQuantiles(t(occ_forest), probs=c(.05, .95))) %>%
+    rename(lwr = `5%`, upr=`95%`) %>%
+    left_join(., fDep_lookup) %>%
+    left_join(., winners_losers)
+
+p2 <- ggplot(props_all, aes(prop, boot::inv.logit(mean), group=species, col=WL_label)) + 
+    geom_line(alpha=.5) +
+    geom_line(data=bind_rows(props_all, occ_forest_summ) %>% filter(prop %in% c(.6, .9)), 
+              lty="longdash", alpha=.5) +
+    geom_point(data=occ_forest_summ, aes(prop, boot::inv.logit(mean)), alpha=.5) +
+    facet_wrap(~factor(fDep_label, levels=c('Low','Medium','High'))) +
+    theme_bw() +
+  theme(text=element_text(family="serif")) +
+  theme(axis.text = element_text(colour="black"), 
+        axis.text.y = element_text(size=16.5),
+        axis.text.x = element_text(size = 16.5),
+        axis.title = element_text(size = 18)) +
+  theme(plot.title = element_text(size = 18)) +
+  #theme(legend.text = element_text(size = 16)) +
+  theme(aspect.ratio = 1, 
+        axis.text = element_text(colour="black"), 
+        panel.grid = element_blank()) +
+    scale_colour_manual(values=cols) +
+    theme(strip.background = element_blank(),
+          strip.text = element_text(hjust=0, face="bold", size = 16),
+          axis.text = element_text(colour="black"),
+          panel.grid=element_blank(), 
+          aspect.ratio =  .8, 
+          legend.position = "none") +
+  theme(panel.spacing = unit(15, "pt")) +
+    scale_x_continuous(breaks=c(seq(0, .6, .2), .9), labels=c(seq(0, .6, .2), "Forest")) +
+    labs(x="Farm wildlife friendliness", y="Occupancy probability", col="", title = bquote(~bold("(a)")))
+
+# plot landscape WF
+
+#unscale tc_1000
+
+tcs_all$tc_1000 <- tcs_all$tc_1000_sc * 0.2610634 + 0.2401884
+
+occ_forest_summ$tc_1000 <- occ_forest_summ$tc_1000_sc * 0.2610634 + 0.2401884
+
+p3 <- ggplot(tcs_all, aes(tc_1000, boot::inv.logit(mean), group=species, col=WL_label)) + 
+    geom_line(alpha=.5) +
+    geom_line(data=bind_rows(tcs_all, occ_forest_summ), 
+              lty="longdash", alpha=.5) +
+    geom_point(data=occ_forest_summ, aes(tc_1000, boot::inv.logit(mean)), alpha=.5) +
+  facet_wrap(~factor(fDep_label, levels=c('Low','Medium','High'))) +
+    theme_bw() +
+  theme(text=element_text(family="serif")) +
+  theme(axis.text = element_text(colour="black"), 
+        axis.text.y = element_text(size=16.5),
+        axis.text.x = element_text(size = 16.5),
+        axis.title = element_text(size = 18)) +
+  theme(plot.title = element_text(size = 18)) +
+  theme(legend.text = element_text(size = 16.5)) +
+    theme(aspect.ratio = 1, 
+        axis.text = element_text(colour="black"), 
+        panel.grid = element_blank()) +
+      scale_colour_manual(values=cols) +
+    theme(strip.background = element_blank(),
+          strip.text = element_text(hjust=0, face="bold", size = 16),
+          axis.text = element_text(colour="black"),
+          panel.grid=element_blank(), 
+          aspect.ratio =  .8, 
+          legend.position = "bottom") +
+  theme(panel.spacing = unit(15, "pt")) +
+  guides(colour = guide_legend(override.aes = list(size = 5, alpha = 1, linetype = 0))) +
+  scale_x_continuous(breaks=c(seq(0, .8, .2), 1.023379), labels=c(seq(0, .8, .2), "Forest")) +
+  labs(x="Landscape wildlife friendliness", y="Occupancy probability", col="", title = bquote(~bold("(b)")))
+  
+plot_all <- egg::ggarrange(p2, p3, heights=c(1,1), widths=c(1,1))
+
