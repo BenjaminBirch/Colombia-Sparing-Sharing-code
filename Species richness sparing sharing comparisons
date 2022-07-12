@@ -1,0 +1,184 @@
+# the size of the management unit 
+n_pts <- 2^(seq(1, 10, len=30))
+
+# the yield of the landscape
+wf_lvl <- c("low_yield" = .6, "high_yield" = .05)
+
+# all pasture with wildlife friendliness X
+occ_pasture_high <- intercepts + occ_habitat2_total*-1 + occ_prop_sc_total * prop_scale(wf_lvl["high_yield"]) 
+occ_pasture_low <- intercepts + occ_habitat2_total*-1 + occ_prop_sc_total * prop_scale(wf_lvl["low_yield"]) 
+occ_pasture_0wf <- intercepts + occ_habitat2_total*-1 + occ_prop_sc_total * prop_scale(0) 
+
+tc1000_lvls <- seq(0.2, 0.8, len=5)
+tc1000_sc_lvls <- tc1000_scale(tc1000_lvls)
+
+diff_catch <- vector("list", length=length(n_pts)*length(tc1000_lvls))
+
+for(i in 1:length(tc1000_sc_lvls)) {
+    print(tc1000_sc_lvls[i])
+    # all pasture with wildlife friendliness X
+    occ_pasture_high <- intercepts + occ_habitat2_total*-1 + 
+        occ_prop_sc_total * prop_scale(wf_lvl["high_yield"]) +
+        occ_tc_1000_total * tc1000_sc_lvls[i]
+    occ_pasture_low <- intercepts + occ_habitat2_total*-1 + 
+        occ_prop_sc_total * prop_scale(wf_lvl["low_yield"]) +
+        occ_tc_1000_total * tc1000_sc_lvls 
+    occ_pasture_0wf <- intercepts + occ_habitat2_total*-1 + occ_prop_sc_total * prop_scale(0) +
+        occ_tc_1000_total * tc1000_sc_lvls[i]
+    for(j in n_pts) {
+        id <- paste0(tc1000_lvls[i], "_", j)
+        # calculate species richness under sharing and sparing, depending on j, 
+        # how many points are being compared
+        #
+        # probability of not being present on any of j*proportion forest points
+        p_not_occ_forest_high <- (boot::inv.logit(-occ_forest))^(wf_lvl["high_yield"]*j)
+        # probability of being present on at least 1 of j*proportion pasture points
+        p_not_occ_pasture_high <- (boot::inv.logit(-occ_pasture_0wf))^((1-wf_lvl["high_yield"])*j)
+        
+        # probability of not being present on any of j*proportion forest points
+        p_not_occ_forest_low <- (boot::inv.logit(-occ_forest))^((wf_lvl["low_yield"])*j)
+        # probability of being present on at least 1 of j*proportion pasture points
+        p_not_occ_pasture_low <- (boot::inv.logit(-occ_pasture_0wf))^((1-wf_lvl["low_yield"])*j)
+        
+        # SR is 1 minus the combined probabilities of *not* being present
+        SR_sparing_high <- matrixStats::rowSums2(1 - p_not_occ_forest_high*p_not_occ_pasture_high)
+        SR_sparing_low <- matrixStats::rowSums2(1 - p_not_occ_forest_low*p_not_occ_pasture_low)
+        
+        SR_sharing_high <- matrixStats::rowSums2(1 - (boot::inv.logit(-occ_pasture_high))^j)
+        SR_sharing_low <- matrixStats::rowSums2(1 - (boot::inv.logit(-occ_pasture_low))^j)
+        
+        diff_catch[[id]] <- tibble(tc1000 = tc1000_lvls[i],
+                                   tc1000_sc = tc1000_sc_lvls[i], 
+                                   j = j, 
+                                   # SR in sharing low yield
+                                   mean_sh_low = mean(SR_sharing_low), 
+                                   lwr_sh_low = quantile(SR_sharing_low, .1), 
+                                   upr_sh_low = quantile(SR_sharing_low, .9), 
+                                   # SR in sharing high yield
+                                   mean_sh_high = mean(SR_sharing_high), 
+                                   lwr_sh_high = quantile(SR_sharing_high, .1), 
+                                   upr_sh_high = quantile(SR_sharing_high, .9), 
+                                   # SR in sparing low yield
+                                   mean_sp_low = mean(SR_sparing_low), 
+                                   lwr_sp_low = quantile(SR_sparing_low, .1), 
+                                   upr_sp_low = quantile(SR_sparing_low, .9),
+                                   # SR in sparing high yield
+                                   mean_sp_high = mean(SR_sparing_high), 
+                                   lwr_sp_high = quantile(SR_sparing_high, .1), 
+                                   upr_sp_high = quantile(SR_sparing_high, .9))
+    }
+}
+
+# bind all together 
+diff_all <- bind_rows(diff_catch)
+
+#edited plots,  remove tc1000 "0.35" and "0.65"
+
+diff_all <- filter(diff_all, tc1000 !=  "0.35")
+diff_all <- filter(diff_all, tc1000 != "0.65")
+
+low_plot1 <- diff_all %>%
+  ggplot(aes(j, mean_sh_low)) + 
+  geom_vline(xintercept=96, lty="longdash") +
+  geom_line(col = "purple2") + 
+  geom_ribbon(aes(ymin=lwr_sh_low, ymax=upr_sh_low, fill = "purple2"), alpha=0.1) +
+  geom_line(aes(y=mean_sp_low), col="#D55E00") +
+  geom_ribbon(aes(ymin=lwr_sp_low, ymax=upr_sp_low, fill="#D55E00"), alpha=0.1, ) +#
+  # scale_x_continuous(trans="log", breaks=2^(0:10)) +
+  labs(x = "Number of points in management unit", 
+       y = "Species richness", title = bquote(~bold("(a)")~"Low production (f = 0.4)")) +
+  facet_wrap(~tc1000, nrow=1) +
+  scale_fill_manual(values = c("#D55E00", "purple2")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  theme(text=element_text(family="serif")) +
+  theme(axis.text = element_text(colour="black"), 
+        axis.text.y = element_text(size=18.5),
+        axis.text.x = element_text(size = 18.5),
+        axis.title = element_text(size = 20)) +
+  theme(plot.title = element_text(size = 20)) +
+  theme(aspect.ratio = 1, 
+        axis.text = element_text(colour="black"), 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(hjust=0, face="bold", size = 18)) +
+  scale_y_continuous(breaks=seq(40, 320, 40), limits = c(40, NA))
+
+low_plot2 <- diff_all %>%
+  filter(abs((j - 96.08)) < .1) %>%
+  ggplot(aes(tc1000, mean_sh_low)) + geom_point(aes(col = "purple2")) +
+  geom_errorbar(aes(ymin=lwr_sh_low, ymax=upr_sh_low, col = "purple2"), width=0) +
+  geom_point(aes(y=mean_sp_low, col="#D55E00")) +
+  geom_errorbar(aes(ymin=lwr_sp_low, ymax=upr_sp_low), width=0, col="#D55E00") +
+  scale_colour_manual(values = c("#D55E00", "purple2")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  theme(text=element_text(family="serif")) +
+  theme(axis.text = element_text(colour="black"), 
+        axis.text.y = element_text(size=18.5),
+        axis.text.x = element_text(size = 18.5),
+        axis.title = element_text(size = 20)) +
+  theme(plot.title = element_text(size = 20)) +
+  theme(aspect.ratio = 1, 
+        axis.text = element_text(colour="black"), 
+        panel.grid = element_blank()) +
+  labs(y = "", x = "Landscape wildlife friendliness", title = bquote(~bold("(b)"))) +
+  scale_y_continuous(breaks=seq(40, 320, 40), limits = c(40, NA)) +
+  scale_x_continuous(breaks = c(0.2, 0.5, 0.8)) 
+
+high_plot1 <- diff_all %>%
+  ggplot(aes(j, mean_sh_high)) + 
+  geom_vline(xintercept=96, lty="longdash") +
+  geom_line(col="purple2") + 
+  geom_ribbon(aes(ymin=lwr_sh_high, ymax=upr_sh_high, fill="#D55E00"), alpha=0.1) +
+  geom_line(aes(y=mean_sp_high), col="#D55E00") +
+  geom_ribbon(aes(ymin=lwr_sp_high, ymax=upr_sp_high, fill="purple2"), alpha=0.1) +
+  labs(x = "Number of points in management unit", 
+  y = "Species richness", title = bquote(~bold("(c)")~"High production (f = 0.95)")) +
+  scale_fill_manual(values = c("purple2", "#D55E00"), labels = c("Land sharing", "Land sparing"), 
+                    guide = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+  facet_wrap(~tc1000, nrow=1) +
+  theme_bw() +
+  theme(legend.position = "bottom") +
+  theme(legend.text = element_text(size = 18.5)) +
+  theme(legend.title = element_blank()) +
+  theme(text=element_text(family="serif")) +
+  theme(axis.text = element_text(colour="black"), 
+        axis.text.y = element_text(size=18.5),
+        axis.text.x = element_text(size = 18.5),
+        axis.title = element_text(size = 20)) +
+  theme(plot.title = element_text(size = 20)) +
+  theme(aspect.ratio = 1, 
+        panel.grid = element_blank(), 
+        strip.background = element_blank(), 
+        strip.text = element_text(hjust=0, face="bold", size = 18)) +
+  scale_y_continuous(breaks=seq(40, 320, 40), limits = c(40, NA))
+
+high_plot2 <- diff_all %>%
+  filter(abs((j - 96.08)) < .1) %>%
+  ggplot(aes(tc1000, mean_sh_high)) + geom_point(aes(col="purple2")) +
+  geom_errorbar(aes(ymin=lwr_sh_high, ymax=upr_sh_high), width=0, col="purple2") +
+  geom_point(aes(y=mean_sp_high, col="#D55E00")) +
+  geom_errorbar(aes(ymin=lwr_sp_high, ymax=upr_sp_high), width=0, col="#D55E00") +
+  scale_colour_manual(values = c("#D55E00", "purple2")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  theme(text=element_text(family="serif")) +
+  theme(axis.text = element_text(colour="black"), 
+        axis.text.y = element_text(size=18.5),
+        axis.text.x = element_text(size = 18.5),
+        axis.title = element_text(size = 20)) +
+  theme(plot.title = element_text(size = 20)) +
+  theme(aspect.ratio = 1, 
+        axis.text = element_text(colour="black"), 
+        panel.grid = element_blank()) +
+  labs(y = "", x = "Landscape wildlife \n friendliness", title = bquote(~bold("(d)"))) +
+  scale_y_continuous(breaks=seq(40, 320, 40), limits = c(40, 280)) + 
+  scale_x_continuous(breaks = c(0.2, 0.5, 0.8)) 
+ 
+
+SR_all <- egg::ggarrange(low_plot1 + labs(x=""),low_plot2 + labs(x=""), 
+                         #+ theme(axis.text.y = element_blank()),
+                         high_plot1, 
+                         high_plot2, #+ theme(axis.text.y = element_blank()), 
+                         ncol=2, widths=c(1, .22))
