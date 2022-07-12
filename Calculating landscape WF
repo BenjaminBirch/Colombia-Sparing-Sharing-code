@@ -19,9 +19,7 @@ DF <- distinct(Pasture_bird, point, .keep_all = TRUE)
 pts <- DF
 
 # EE datasets ----
-# Load raster files (not using most currently, but have retained for future use)
-# ALOS <- ee$Image('JAXA/ALOS/AW3D30/V2_2')
-# SRTM30 <- ee$Image("USGS/SRTMGL1_003")
+
 tc <- ee$Image("UMD/hansen/global_forest_change_2019_v1_7")
 epsg <- ee$Projection('EPSG:4326')
 
