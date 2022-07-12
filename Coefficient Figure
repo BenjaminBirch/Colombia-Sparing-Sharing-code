@@ -4,6 +4,8 @@ mod <- readRDS("Bird_flocker_model_new.rds")
 class(mod) <- c("brmsfit", "flocker_fit")
 attributes(mod)$lik_type <- "V"
 
+#create df
+
 mod_fixefs <- fixef(mod, summary = F) %>%
   as_tibble
 hab_effs <- mod_fixefs %>%
@@ -26,6 +28,8 @@ hab_effs <- mod_fixefs %>%
             pd = round(min(sum(value<0), sum(value>0))/n(), 2)) %>%
   mutate(pd = ifelse(pd == 0, "<0.01", pd))
 
+#labels for y-axis
+
 ylabs <- expression(
   beta["forest, high"],
   beta["forest, medium"],
@@ -38,7 +42,7 @@ ylabs <- expression(
   beta["landscape wf, low"]
 )
 
-windowsFonts(Times=windowsFont("TT Times New Roman"))
+#create figure
 
 fix_eff_fig <- ggplot(hab_effs, aes(mean, variable)) + geom_point() +
   geom_linerange(aes(xmin=lwr, xmax=upr)) + 
@@ -63,6 +67,8 @@ fix_eff_fig <- ggplot(hab_effs, aes(mean, variable)) + geom_point() +
   labs(x = "Parameter value (\u00B1 95% CI)", y="Fixed Effects Parameters") +
   geom_text(aes(label=pd, x = upr), position = position_dodge(width=.5), 
             hjust=-0.2, vjust=.3, size=4.5, family = "serif")
+            
+#reduce panel size            
 
 fix_eff_fig + force_panelsizes(rows = unit(8, "in"),
                                cols = unit(7, "in"))
