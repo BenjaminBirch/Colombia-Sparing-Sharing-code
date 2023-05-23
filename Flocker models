@@ -102,6 +102,18 @@ priors <- c(set_prior("normal(0, 5)", class="b"),
 #make flocker model
 #FULL model
 
+fit2 <- flock(f_occ = ~ 1 + 
+                  tc_1000_sc * forest_dependency + 
+                  prop_sc * forest_dependency + 
+                  habitat2 * forest_dependency + 
+                  (1 + habitat2 + tc_1000_sc + prop_sc || species) + 
+                  site + (1 | site_sp),
+              f_det = ~ 1 + time + habitat2 + (1 + time | species), 
+              flocker_data = d2, cores = 4, chains = 4,
+              prior = user_prior, 
+              save_model = "model_v3",
+              backend = "cmdstanr")
+
 Bird_flocker_model_new <- flocker::flock(f_occ = ~ 1 + tc_1000_sc *
                             forest_dependency +
                             prop_sc * forest_dependency + 
