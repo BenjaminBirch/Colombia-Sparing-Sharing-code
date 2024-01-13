@@ -14,7 +14,7 @@ ee$Initialize()             # Trigger the authentication
 
 #Get Colombia pts ----
 
-DF <- distinct(Pasture_bird, point, .keep_all = TRUE)
+DF <- distinct(Pasture, point, .keep_all = TRUE)
 
 pts <- DF
 
