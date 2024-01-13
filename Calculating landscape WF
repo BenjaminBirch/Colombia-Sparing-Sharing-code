@@ -43,7 +43,7 @@ get_tc <- function(geometry_i) {
 
 #* get buffers ----
 buffer.width <- 1000 # radius, in meters
-max.error <- 1             # maximum error (controls number of vertices), in meters
+max.error <- 1 # maximum error (controls number of vertices), in meters
 geomcircs <- lapply(1:nrow(pts), do_buffer)
 
 #* create object ----
@@ -51,10 +51,6 @@ geomcircs <- lapply(1:nrow(pts), do_buffer)
 latlng = ee$Image$pixelCoordinates(projection=epsg)$addBands(tc2000)$addBands(loss)
 
 #* extract tc values ----
-# note: this is fairly slow (takes 2:2.5 minutes for 450 pts with 500m buffer)
-# You can much more quickly extract all values outside of a apply loop, but it 
-# wasn't immediately obvious how to then append the point identifier back to this
-# total vector of values. 
 tcs <- lapply(geomcircs, get_tc)
 tcs_df <- tcs %>%
   bind_rows(., .id = "id") %>%
@@ -83,3 +79,34 @@ tcs_df %>%
         axis.text = element_blank(), 
         axis.ticks=element_blank()) +
   labs(x="", y="")
+
+---- final plots
+tiff("plot_wf.tiff", units="in", width=11.35, height=10.16, res=1000)
+  tcs_df %>%
+  # as.data.frame %>% 
+  filter(id %in% 1:46) %>% 
+  mutate(tc = cut(forest2019, c(0, 1), ordered=T)) %>%
+  ggplot(aes(x, y, fill=tc)) + geom_tile() + 
+  facet_wrap(~point, scales="free", ncol = 8) +
+  theme_bw() +
+  scale_fill_manual(values = c("darkolivegreen3")) +  
+  theme(aspect.ratio=1, 
+        strip.text=element_text(hjust=0, face="bold"), 
+        strip.background = element_blank(), 
+        panel.border = element_blank(), 
+        panel.grid=element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks=element_blank()) +
+  labs(x="", y="") +
+       theme(text=element_text(size=17,  family="serif")) +
+    theme(legend.position = "bottom", legend.justification = "center") +
+    theme(legend.margin = margin(c(5, 5, 5, 0)),
+          legend.text = element_text(margin = margin(r = 10, unit = "pt"))) +
+    theme(legend.key.size = unit(1.5,"line")) +
+    theme(legend.position = "none")
+  dev.off()
+
+
+
+
+
